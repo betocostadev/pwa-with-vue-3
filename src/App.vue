@@ -1,106 +1,233 @@
 <script>
 export default {
-  name: 'App',
+  name: "App",
   data: () => ({
+    database: null,
     todos: [],
-    newTodo: '',
+    newTodo: "",
     editedTodo: null,
-    visibility: 'all'
+    visibility: "all",
   }),
 
   computed: {
     activeTasks() {
-      return this.todos.filter(todo => !todo.completed)
+      return this.todos.filter((todo) => !todo.completed);
     },
     filteredTodos() {
-      if (this.visibility === 'all') {
-        return this.todos
-      } else if (this.visibility === 'active') {
-        return this.activeTasks
+      if (this.visibility === "all") {
+        return this.todos;
+      } else if (this.visibility === "active") {
+        return this.activeTasks;
       } else {
-        return this.todos.filter(todo => todo.completed)
+        return this.todos.filter((todo) => todo.completed);
       }
     },
     remaining() {
-      return this.activeTasks.length
+      return this.activeTasks.length;
     },
     allDone: {
       get() {
-        return this.remaining === 0
+        return this.remaining === 0;
       },
       set(value) {
-        this.todos.forEach(todo => {
-          todo.completed = value
-        })
-      }
-    }
+        this.todos.forEach((todo) => {
+          todo.completed = value;
+          this.saveTodo({ ...todo });
+        });
+      },
+    },
   },
 
   // methods that implement data logic.
   // note there's no DOM manipulation here at all.
   methods: {
     addTodo() {
-      const value = this.newTodo && this.newTodo.trim()
+      const value = this.newTodo && this.newTodo.trim();
       const todoItem = {
         id: this.todos.length + 1,
         title: value,
-        completed: false
-      }
+        completed: false,
+      };
 
       if (!value) {
-        return
+        return;
       }
-      this.todos.push(todoItem)
-      this.newTodo = ''
+      this.todos.push(todoItem);
+      this.saveTodo(todoItem);
+      this.newTodo = "";
     },
 
     cancelEdit(todo) {
-      this.editedTodo = null
-      todo.title = this.beforeEditCache
+      this.editedTodo = null;
+      todo.title = this.beforeEditCache;
+    },
+
+    async deleteTodo(todo) {
+      this.database = await this.getDatabase();
+
+      return new Promise((resolve, reject) => {
+        const transaction = this.database.transaction("todos", "readwrite");
+        const store = transaction.objectStore("todos");
+
+        store.delete(todo.id);
+
+        transaction.oncomplete = () => {
+          resolve("Item successfully deleted.");
+        };
+
+        transaction.onerror = (event) => {
+          reject(event);
+        };
+      });
     },
 
     doneEdit(todo) {
       if (!this.editedTodo) {
-        return
+        return;
       }
-      this.editedTodo = null
-      todo.title = todo.title.trim()
+      this.editedTodo = null;
+      todo.title = todo.title.trim();
+      // Save the edited todo to the database
+      this.saveTodo({
+        ...todo,
+        title: todo.title,
+      });
       if (!todo.title) {
-        this.removeTodo(todo)
+        this.removeTodo(todo);
       }
     },
 
     editTodo(todo) {
-      this.beforeEditCache = todo.title
-      this.editedTodo = todo
+      this.beforeEditCache = todo.title;
+      this.editedTodo = todo;
+    },
+
+    async getDatabase() {
+      return new Promise((resolve, reject) => {
+        if (this.database) {
+          resolve(this.database);
+        }
+
+        let request = window.indexedDB.open("todomvcDB", 1);
+
+        request.onerror = (event) => {
+          console.error("ERROR: Unable to open database", event);
+          reject("error");
+        };
+
+        request.onsuccess = (event) => {
+          this.database = event.target.result;
+          resolve(this.database);
+        };
+
+        request.onupgradeneeded = (event) => {
+          let database = event.target.result;
+          database.createObjectStore("todos", {
+            autoIncremet: true,
+            keyPath: "id",
+          });
+        };
+      });
+    },
+
+    async getTodoStore() {
+      this.database = await this.getDatabase();
+
+      return new Promise((resolve, reject) => {
+        const transaction = this.database.transaction("todos", "readonly");
+        const store = transaction.objectStore("todos");
+
+        let todoList = [];
+
+        store.openCursor().onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            todoList.push(cursor.value);
+            cursor.continue();
+          }
+        };
+
+        transaction.oncomplete = () => {
+          resolve(todoList);
+        };
+
+        transaction.onerror = (event) => {
+          reject(event);
+        };
+      });
     },
 
     pluralize(word, count) {
-      return word + (count === 1 ? '' : 's')
+      return word + (count === 1 ? "" : "s");
     },
 
     removeCompleted() {
-      this.todos = this.todos.filter(item => {
-        return !item.completed
-      })
+      this.todos = this.todos.filter((item) => {
+        if (item.completed) {
+          this.deleteTodo(item);
+        } else {
+          return !item.completed;
+        }
+      });
     },
 
     removeTodo(todo) {
-      const index = this.todos.indexOf(todo)
-      this.todos.splice(index, 1)
+      const index = this.todos.indexOf(todo);
+      this.todos.splice(index, 1);
+      this.deleteTodo(todo);
+    },
+
+    async saveTodo(todo) {
+      this.database = await this.getDatabase();
+
+      return new Promise((resolve, reject) => {
+        const transaction = this.database.transaction("todos", "readwrite");
+        const store = transaction.objectStore("todos");
+
+        store.put(todo);
+
+        transaction.oncomplete = () => {
+          resolve("Item successfully saved.");
+        };
+
+        transaction.onerror = (event) => {
+          reject(event);
+        };
+      });
     },
 
     updateTodo(todo) {
-      this.todos.find(item => item === todo).completed = !todo.completed
-    }
-  }
-}
+      this.todos.find((item) => item === todo).completed = !todo.completed;
+      this.saveTodo({ ...todo });
+    },
+
+    logOrientationChange() {
+      const orientation = screen.orientation;
+      console.log("The orientation of the screen is: ", orientation);
+    },
+  },
+
+  mounted() {
+    const orientation = screen.orientation;
+    orientation.onchange = this.logOrientationChange;
+    console.log(orientation);
+    // console.log("The orientation of the screen is: " + screen.orientation);
+    // window.screen.lockOrientation("landscape");
+  },
+
+  async created() {
+    this.todos = await this.getTodoStore();
+  },
+};
 </script>
 
 <template>
   <section class="todoapp">
     <header class="header">
       <h1>todos</h1>
+      <!-- <h2>Database</h2>
+      {{ database }}
+      <button @click="getDatabase">Get DB</button> -->
       <input
         class="new-todo"
         autofocus
@@ -149,7 +276,7 @@ export default {
     <footer class="footer" v-show="todos.length">
       <span class="todo-count">
         <strong v-text="remaining"></strong>
-        {{ pluralize('item', remaining) }} left
+        {{ pluralize("item", remaining) }} left
       </span>
       <ul class="filters">
         <li>
@@ -199,8 +326,8 @@ export default {
 </template>
 
 <style>
-@import './styles/todomvc-base.css';
-@import './styles/todomvc-index.css';
+@import "./styles/todomvc-base.css";
+@import "./styles/todomvc-index.css";
 
 #app {
   font-family: Avenir, Helvetica, Arial, sans-serif;
